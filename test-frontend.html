@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>CRM Test</title>
+</head>
+<body>
+    <h1>CRM Messages</h1>
+    <div id="messages"></div>
+    
+    <script>
+        async function loadMessages() {
+            try {
+                const response = await fetch('http://localhost:5001/api/messages');
+                const messages = await response.json();
+                
+                const container = document.getElementById('messages');
+                container.innerHTML = messages.map(msg => `
+                    <div style="border:1px solid #ccc; margin:10px; padding:10px">
+                        <strong>${msg.user_name}</strong><br>
+                        ${msg.text}<br>
+                        ${msg.photos?.length ? `📷 ${msg.photos.length} фото` : ''}<br>
+                        <small>${new Date(msg.created_at).toLocaleString()}</small>
+                    </div>
+                `).join('');
+                
+                console.log('Загружено сообщений:', messages.length);
+            } catch (error) {
+                console.error('Ошибка:', error);
+                document.getElementById('messages').innerHTML = 'Ошибка загрузки';
+            }
+        }
+        
+        loadMessages();
+        setInterval(loadMessages, 5000);
+    </script>
+</body>
+</html>

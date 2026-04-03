@@ -102,9 +102,9 @@ class MaxBot:
             logger.error(f"❌ Ошибка: {e}")
             return False
     
-    def download_and_upload_photo(self, file_id: str, save_local: bool = True) -> Optional[Dict]:
+    def download_and_upload_photo(self, file_id: str, save_local: bool = True) -> Optional[str]:
         """
-        Загрузка фото с локальным сохранением для отладки
+        Загрузка фото в MAX API и получение постоянного URL
         """
         try:
             # Шаг 1: Получаем содержимое файла через API MAX
@@ -123,7 +123,6 @@ class MaxBot:
             logger.info(f"✅ Файл скачан: {len(file_content)} байт")
             
             # Локальное сохранение для отладки
-            local_path = None
             if save_local and file_content:
                 local_path = PHOTOS_DIR / f"{file_id}.jpg"
                 with open(local_path, 'wb') as f:
@@ -164,11 +163,7 @@ class MaxBot:
                 if photo_url:
                     logger.info(f"✅ Фото загружено в MAX")
                     logger.info(f"   URL: {photo_url[:80]}...")
-                    return {
-                        "url": photo_url,
-                        "token": None,
-                        "local_path": str(local_path) if local_path else None
-                    }
+                    return photo_url
                 else:
                     logger.warning(f"⚠️ Неожиданный ответ MAX: {result}")
                     return None
@@ -204,7 +199,7 @@ class MaxBot:
             return False
     
     def process_message_created(self, update: Dict):
-        """Обработка нового сообщения с детальным логированием"""
+        """Обработка нового сообщения"""
         logger.info("=" * 60)
         
         # Получаем сообщение из update
@@ -219,35 +214,23 @@ class MaxBot:
         body = message.get("body", {})
         text = body.get("text", "") or message.get("text", "")
         
-        # Проверяем команду /start
-        if text == "/start":
-            logger.info(f"👋 Пользователь {sender_name} (ID: {target_user_id}) запустил бота")
+        # Проверяем команду /start (включая кнопку "Начать")
+        if text == "/start" or text == "Начать" or text == "start":
+            logger.info(f"👋 Пользователь {sender_name} (ID: {target_user_id}) нажал кнопку 'Начать'")
             self.send_message_to_user(target_user_id, WELCOME_MESSAGE)
             return
         
-        # Логируем структуру сообщения для отладки
-        logger.info("📨 СТРУКТУРА СООБЩЕНИЯ:")
-        logger.info(json.dumps(message, indent=2, default=str, ensure_ascii=False))
-        
-        # Пробуем найти вложения в разных местах
+        # Логируем структуру сообщения для отладки (только если есть вложения)
         attachments = []
         
-        # Вариант 1: В body
+        # Пробуем найти вложения в разных местах
         if body.get("attachments"):
             attachments = body.get("attachments", [])
             logger.info(f"📎 Найдены attachments в body: {len(attachments)}")
         
-        # Вариант 2: Прямо в message
         if not attachments and message.get("attachments"):
             attachments = message.get("attachments", [])
             logger.info(f"📎 Найдены attachments в message: {len(attachments)}")
-        
-        # Вариант 3: В поле media
-        if not attachments and message.get("media"):
-            media = message.get("media", {})
-            if media.get("attachments"):
-                attachments = media.get("attachments", [])
-                logger.info(f"📎 Найдены attachments в media: {len(attachments)}")
         
         # Получаем chat_id
         recipient = message.get("recipient", {})
@@ -258,45 +241,30 @@ class MaxBot:
         logger.info(f"📝 Текст: {text[:100] if text else 'Нет текста'}")
         logger.info(f"📎 Найдено вложений: {len(attachments)}")
         
-        # Обрабатываем каждое вложение
+        # Обрабатываем только реальные вложения с фото
         photo_urls = []
-        photo_tokens = []
         
         for idx, attachment in enumerate(attachments):
             att_type = attachment.get("type")
             payload = attachment.get("payload", {})
             
-            logger.info(f"📎 Вложение #{idx}: type={att_type}")
-            logger.info(f"   payload: {json.dumps(payload, ensure_ascii=False)}")
-            
-            if att_type in ["image", "photo"]:
+            if att_type == "image":
                 # Пробуем разные варианты получения ID файла
                 file_id = (
                     payload.get("file_id") or 
                     payload.get("id") or 
                     payload.get("fileId") or
-                    payload.get("file") or
-                    payload.get("file_id_str")
+                    payload.get("file")
                 )
                 
                 if file_id:
                     logger.info(f"📷 Найден file_id: {file_id}")
-                    result = self.download_and_upload_photo(file_id, save_local=True)
-                    if result and result.get("url"):
-                        photo_urls.append(result["url"])
+                    photo_url = self.download_and_upload_photo(file_id, save_local=True)
+                    if photo_url:
+                        photo_urls.append(photo_url)
                         logger.info(f"✅ Фото успешно обработано")
-                        if result.get('local_path'):
-                            logger.info(f"   Локально сохранено: {result['local_path']}")
                     else:
                         logger.warning(f"⚠️ Не удалось обработать фото: {file_id}")
-                else:
-                    logger.warning(f"⚠️ Не удалось найти file_id в payload")
-                    logger.warning(f"   Доступные ключи: {list(payload.keys())}")
-                    
-                    # Если есть прямой URL в payload
-                    if payload.get("url"):
-                        logger.info(f"   Найден прямой URL: {payload.get('url')}")
-                        photo_urls.append(payload.get("url"))
         
         # Получаем timestamp
         timestamp = update.get("timestamp", datetime.now().timestamp())
@@ -305,7 +273,7 @@ class MaxBot:
         else:
             received_at = datetime.now().isoformat()
         
-        # Формируем данные для CRM
+        # Формируем данные для CRM (только с реальными фото)
         crm_payload = {
             "source": "max",
             "chat_id": str(chat_id) if chat_id else "",
@@ -313,20 +281,20 @@ class MaxBot:
             "user_name": sender_name,
             "text": text,
             "photos": photo_urls,
-            "photo_tokens": photo_tokens,
             "received_at": received_at
         }
         
         logger.info(f"📤 Итоговые данные для CRM:")
+        logger.info(f"   Текст: {text[:50] if text else 'Нет'}")
         logger.info(f"   Фото: {len(photo_urls)} шт.")
-        if photo_urls:
-            logger.info(f"   Первое фото: {photo_urls[0][:80]}...")
         
         # Сохраняем в CRM
         if self.save_to_crm(crm_payload):
-            reply_text = "✅ Ваше сообщение принято! Спасибо за бдительность."
             if photo_urls:
-                reply_text += f" 📷 Получено фото: {len(photo_urls)} шт."
+                reply_text = f"✅ Ваше сообщение принято! Спасибо за бдительность. 📷 Получено фото: {len(photo_urls)} шт."
+            else:
+                reply_text = "✅ Ваше сообщение принято! Спасибо за бдительность."
+            
             if target_user_id:
                 self.send_message_to_user(target_user_id, reply_text)
     
@@ -345,12 +313,12 @@ class MaxBot:
                 
                 for update in updates:
                     update_type = update.get("update_type")
-                    logger.info(f"📌 Тип обновления: {update_type}")
                     
                     if update_type == "message_created":
                         self.process_message_created(update)
                     else:
-                        logger.info(f"Другое обновление: {json.dumps(update, indent=2, ensure_ascii=False)}")
+                        # Не логируем другие типы обновлений, чтобы не засорять консоль
+                        pass
                 
                 time.sleep(0.5)
             except KeyboardInterrupt:

@@ -1,7 +1,6 @@
-# crm_backend.py - ФИНАЛЬНАЯ ВЕРСИЯ
+# crm_backend.py - РАБОЧАЯ ВЕРСИЯ С ВРЕМЕНЕМ ЕКАТЕРИНБУРГА
 from fastapi import FastAPI, HTTPException, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, ConfigDict
 from typing import List, Optional
 from datetime import datetime, timedelta
@@ -20,6 +19,19 @@ Base = declarative_base()
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Часовой пояс Екатеринбурга (UTC+5)
+YEKATERINBURG_OFFSET = timedelta(hours=5)
+
+def get_yekaterinburg_time():
+    """Возвращает текущее время в Екатеринбурге (UTC+5)"""
+    return datetime.utcnow() + YEKATERINBURG_OFFSET
+
+def format_yekaterinburg_time(dt):
+    """Форматирует время для отображения"""
+    if dt:
+        return dt.strftime('%Y-%m-%d %H:%M:%S')
+    return None
 
 # Enums
 class MessageStatus(str, enum.Enum):
@@ -44,11 +56,11 @@ class MessageModel(Base):
     user_id = Column(String, index=True)
     user_name = Column(String)
     text = Column(Text)
-    photos = Column(JSON, default=list)  # URL фото
+    photos = Column(JSON, default=list)
     status = Column(Enum(MessageStatus), default=MessageStatus.NEW)
     priority = Column(Enum(Priority), default=Priority.MEDIUM)
-    created_at = Column(DateTime, default=datetime.now)
-    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    created_at = Column(DateTime, default=get_yekaterinburg_time)
+    updated_at = Column(DateTime, default=get_yekaterinburg_time, onupdate=get_yekaterinburg_time)
     notes = Column(Text, nullable=True)
     assigned_to = Column(String, nullable=True)
     tags = Column(JSON, default=list)
@@ -66,7 +78,7 @@ class MessageCreate(BaseModel):
     user_name: str
     text: str
     photos: List[str] = []
-    received_at: datetime
+    received_at: Optional[datetime] = None
 
 class MessageResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -113,10 +125,19 @@ def get_db():
 # API Endpoints
 @app.post("/api/messages", response_model=MessageResponse)
 def create_message(message: MessageCreate, db: Session = Depends(get_db)):
-    """Создание нового сообщения"""
+    """Создание нового сообщения с временем Екатеринбурга"""
     
-    logger.info(f"Получено сообщение от {message.user_name}")
-    logger.info(f"Фото: {len(message.photos)} шт.")
+    # Определяем время получения (Екатеринбург)
+    if message.received_at:
+        received_at = message.received_at
+        logger.info(f"📅 Используем присланное время: {received_at}")
+    else:
+        received_at = get_yekaterinburg_time()
+        logger.info(f"📅 Используем текущее время Екатеринбурга: {received_at}")
+    
+    logger.info(f"📨 Получено сообщение от {message.user_name}")
+    logger.info(f"📷 Фото: {len(message.photos)} шт.")
+    logger.info(f"🕐 Время Екатеринбург: {format_yekaterinburg_time(received_at)}")
     
     db_message = MessageModel(
         source=message.source,
@@ -125,7 +146,7 @@ def create_message(message: MessageCreate, db: Session = Depends(get_db)):
         user_name=message.user_name,
         text=message.text,
         photos=message.photos,
-        created_at=message.received_at
+        created_at=received_at
     )
     db.add(db_message)
     db.commit()
@@ -164,10 +185,12 @@ def list_messages(
     if status != MessageStatus.CANCELLED:
         query = query.filter(MessageModel.status != MessageStatus.CANCELLED)
     
-    return query.order_by(
+    messages = query.order_by(
         MessageModel.priority.desc(),
         MessageModel.created_at.desc()
     ).offset(offset).limit(limit).all()
+    
+    return messages
 
 @app.get("/api/messages/{message_id}", response_model=MessageResponse)
 def get_message(message_id: int, db: Session = Depends(get_db)):
@@ -190,17 +213,34 @@ def update_message(
         setattr(message, field, value)
     
     if update.status == MessageStatus.COMPLETED and not message.resolved_at:
-        message.resolved_at = datetime.now()
+        message.resolved_at = get_yekaterinburg_time()
         if message.created_at:
             message.response_time = int((message.resolved_at - message.created_at).total_seconds())
     
+    message.updated_at = get_yekaterinburg_time()
     db.commit()
     db.refresh(message)
     return message
 
+@app.delete("/api/messages/last")
+def delete_last_message(chat_id: str, db: Session = Depends(get_db)):
+    message = db.query(MessageModel).filter(
+        MessageModel.chat_id == chat_id
+    ).order_by(MessageModel.created_at.desc()).first()
+    
+    if not message:
+        raise HTTPException(status_code=404, detail="No messages found")
+    
+    if message.status == MessageStatus.NEW:
+        message.status = MessageStatus.CANCELLED
+        db.commit()
+        return {"status": "cancelled", "message_id": message.id}
+    
+    raise HTTPException(status_code=400, detail="Cannot cancel message in current status")
+
 @app.get("/api/statistics")
 def get_statistics(db: Session = Depends(get_db)):
-    now = datetime.now()
+    now = get_yekaterinburg_time()
     today_start = datetime(now.year, now.month, now.day)
     week_start = today_start - timedelta(days=now.weekday())
     
@@ -237,15 +277,45 @@ def get_statistics(db: Session = Depends(get_db)):
         "messages_this_week": messages_week
     }
 
+@app.get("/api/debug/photos")
+def debug_photos(db: Session = Depends(get_db)):
+    """Отладочный эндпоинт для проверки фото в БД"""
+    messages = db.query(MessageModel).filter(
+        MessageModel.photos != []
+    ).limit(10).all()
+    
+    result = []
+    for msg in messages:
+        result.append({
+            "id": msg.id,
+            "user_name": msg.user_name,
+            "photo_count": len(msg.photos),
+            "photos": msg.photos,
+            "created_at": format_yekaterinburg_time(msg.created_at)
+        })
+    
+    return {
+        "total_messages_with_photos": len(messages),
+        "messages": result
+    }
+
 @app.get("/api/health")
 def health_check():
-    return {"status": "ok", "timestamp": datetime.now().isoformat()}
+    now = get_yekaterinburg_time()
+    return {
+        "status": "ok",
+        "timestamp": now.isoformat(),
+        "timezone": "Asia/Yekaterinburg (UTC+5)",
+        "local_time": format_yekaterinburg_time(now)
+    }
 
 if __name__ == "__main__":
     import uvicorn
+    now = get_yekaterinburg_time()
     print("=" * 50)
     print("🚀 Запуск CRM Backend на http://localhost:5001")
     print("📚 Документация API: http://localhost:5001/docs")
+    print(f"🕐 Время Екатеринбурга: {format_yekaterinburg_time(now)}")
     print("=" * 50)
     
     uvicorn.run(

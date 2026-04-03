@@ -187,17 +187,45 @@ function App() {
     return texts[status] || status;
   };
 
-  const formatDate = (dateString) => {
-    const date = new Date(dateString);
+ const formatDate = (dateString) => {
+  if (!dateString) return 'Дата неизвестна';
+  
+  try {
+    // Создаем дату из UTC строки
+    const utcDate = new Date(dateString);
+    
+    // Проверка на валидность
+    if (isNaN(utcDate.getTime())) {
+      console.error('Invalid date:', dateString);
+      return 'Неверная дата';
+    }
+    
+    // Преобразуем в локальное время для отображения
     const now = new Date();
-    const diff = now - date;
+    const diff = now - utcDate;
     const minutes = Math.floor(diff / 60000);
-
+    const hours = Math.floor(diff / 3600000);
+    const days = Math.floor(diff / 86400000);
+    
     if (minutes < 1) return 'Только что';
     if (minutes < 60) return `${minutes} мин назад`;
-    if (minutes < 1440) return `${Math.floor(minutes / 60)} ч назад`;
-    return date.toLocaleDateString('ru-RU');
-  };
+    if (hours < 24) return `${hours} ч назад`;
+    if (days < 7) return `${days} дн назад`;
+    
+    // Показываем локальное время
+    return utcDate.toLocaleString('ru-RU', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      timeZone: 'Asia/Yekaterinburg'  // Явно указываем часовой пояс Москвы
+    });
+  } catch (error) {
+    console.error('Date formatting error:', error);
+    return 'Ошибка даты';
+  }
+};
 
   return (
     <>
