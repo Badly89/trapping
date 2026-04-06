@@ -15,8 +15,6 @@ import {
   LocationOn
 } from '@mui/icons-material';
 
-import LocationDisplay from './components/LocationDisplay';
-
 const API_URL = 'http://localhost:5001/api';
 
 // Компонент для отображения галереи фото
@@ -308,19 +306,7 @@ function App() {
                 </CardContent>
               </Card>
             </Grid>
-            <Grid size={{ xs: 12, md: 3 }}>
-              <Card>
-                <CardContent>
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                    <LocationOn color="action" />
-                    <Typography variant="body2" color="textSecondary">
-                      С геолокацией
-                    </Typography>
-                  </Box>
-                  <Typography variant="h4">{stats.messages_with_location || 0}</Typography>
-                </CardContent>
-              </Card>
-            </Grid>
+           
           </Grid>
         )}
 
@@ -378,15 +364,7 @@ function App() {
                                   variant="outlined"
                                 />
                               </Tooltip>
-                              {msg.latitude && msg.longitude && (
-                                <Chip
-                                  icon={<LocationOn />}
-                                  label="Геолокация"
-                                  size="small"
-                                  color="info"
-                                  variant="outlined"
-                                />
-                              )}
+                             
                             </Box>
                           }
                           secondary={
@@ -395,15 +373,7 @@ function App() {
                                 {msg.text?.substring(0, 100) || 'Нет текста'}
                               </Typography>
                               
-                              {/* Геолокация в списке сообщений */}
-                              {msg.latitude && msg.longitude && (
-                                <Box component="span" sx={{ display: 'block', mt: 0.5 }}>
-                                  <Typography component="span" variant="caption" color="textSecondary" sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                                    <LocationOn fontSize="inherit" />
-                                    📍 {msg.latitude.toFixed(4)}, {msg.longitude.toFixed(4)}
-                                  </Typography>
-                                </Box>
-                              )}
+                             
                               
                               {msg.photos?.length > 0 && (
                                 <Box component="span" sx={{ display: 'block', mt: 0.5 }}>
@@ -528,15 +498,7 @@ function App() {
                   {selectedMessage.text || 'Нет текста'}
                 </Typography>
 
-                {/* Геолокация в диалоге */}
-                {selectedMessage.latitude && selectedMessage.longitude && (
-                  <LocationDisplay 
-                    latitude={selectedMessage.latitude}
-                    longitude={selectedMessage.longitude}
-                  />
-                )}
-
-                {/* Галерея фото */}
+                  {/* Галерея фото */}
                 <ImageGallery photos={selectedMessage.photos} />
 
                 <Divider sx={{ my: 2 }} />
