@@ -1,10 +1,10 @@
-# crm_backend.py - РАБОЧАЯ ВЕРСИЯ С ВРЕМЕНЕМ ЕКАТЕРИНБУРГА
+# crm_backend.py - РАБОЧАЯ ВЕРСИЯ С ГЕОЛОКАЦИЕЙ
 from fastapi import FastAPI, HTTPException, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict
 from typing import List, Optional
 from datetime import datetime, timedelta
-from sqlalchemy import create_engine, Column, String, Integer, DateTime, JSON, Enum, Text, func
+from sqlalchemy import create_engine, Column, String, Integer, DateTime, JSON, Enum, Text, Float, func
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
 import logging
 import enum
@@ -66,9 +66,31 @@ class MessageModel(Base):
     tags = Column(JSON, default=list)
     response_time = Column(Integer, nullable=True)
     resolved_at = Column(DateTime, nullable=True)
+    # Поля для геолокации
+    latitude = Column(Float, nullable=True)
+    longitude = Column(Float, nullable=True)
+    location_address = Column(String, nullable=True)
 
-# Создание таблиц
+# Создание таблиц (обновляем существующую таблицу)
+def upgrade_database():
+    """Обновление базы данных - добавление полей для геолокации"""
+    try:
+        # Проверяем существование колонок и добавляем если их нет
+        inspector = inspect(engine)
+        columns = [col['name'] for col in inspector.get_columns('messages')]
+        
+        if 'latitude' not in columns:
+            with engine.connect() as conn:
+                conn.execute('ALTER TABLE messages ADD COLUMN latitude FLOAT')
+                conn.execute('ALTER TABLE messages ADD COLUMN longitude FLOAT')
+                conn.execute('ALTER TABLE messages ADD COLUMN location_address TEXT')
+                conn.commit()
+                logger.info("✅ Добавлены поля для геолокации")
+    except Exception as e:
+        logger.warning(f"⚠️ Обновление базы данных: {e}")
+
 Base.metadata.create_all(bind=engine)
+upgrade_database()
 
 # Pydantic схемы
 class MessageCreate(BaseModel):
@@ -78,6 +100,9 @@ class MessageCreate(BaseModel):
     user_name: str
     text: str
     photos: List[str] = []
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    location_address: Optional[str] = None
     received_at: Optional[datetime] = None
 
 class MessageResponse(BaseModel):
@@ -96,6 +121,9 @@ class MessageResponse(BaseModel):
     notes: Optional[str] = None
     assigned_to: Optional[str] = None
     tags: List[str] = []
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    location_address: Optional[str] = None
 
 class MessageUpdate(BaseModel):
     status: Optional[MessageStatus] = None
@@ -122,10 +150,20 @@ def get_db():
     finally:
         db.close()
 
+def generate_maps_links(lat, lon):
+    """Генерирует ссылки на карты"""
+    if not lat or not lon:
+        return None
+    return {
+        "yandex": f"https://yandex.ru/maps/?pt={lon},{lat}&z=17&l=map",
+        "google": f"https://www.google.com/maps?q={lat},{lon}",
+        "openstreetmap": f"https://www.openstreetmap.org/?mlat={lat}&mlon={lon}#map=17/{lat}/{lon}"
+    }
+
 # API Endpoints
 @app.post("/api/messages", response_model=MessageResponse)
 def create_message(message: MessageCreate, db: Session = Depends(get_db)):
-    """Создание нового сообщения с временем Екатеринбурга"""
+    """Создание нового сообщения с поддержкой геолокации"""
     
     # Определяем время получения (Екатеринбург)
     if message.received_at:
@@ -139,6 +177,12 @@ def create_message(message: MessageCreate, db: Session = Depends(get_db)):
     logger.info(f"📷 Фото: {len(message.photos)} шт.")
     logger.info(f"🕐 Время Екатеринбург: {format_yekaterinburg_time(received_at)}")
     
+    if message.latitude and message.longitude:
+        logger.info(f"📍 Геолокация: {message.latitude}, {message.longitude}")
+        maps = generate_maps_links(message.latitude, message.longitude)
+        if maps:
+            logger.info(f"   Яндекс.Карты: {maps['yandex']}")
+    
     db_message = MessageModel(
         source=message.source,
         chat_id=message.chat_id,
@@ -146,7 +190,10 @@ def create_message(message: MessageCreate, db: Session = Depends(get_db)):
         user_name=message.user_name,
         text=message.text,
         photos=message.photos,
-        created_at=received_at
+        created_at=received_at,
+        latitude=message.latitude,
+        longitude=message.longitude,
+        location_address=message.location_address
     )
     db.add(db_message)
     db.commit()
@@ -161,6 +208,7 @@ def list_messages(
     chat_id: Optional[str] = None,
     assigned_to: Optional[str] = None,
     search: Optional[str] = None,
+    has_location: Optional[bool] = None,
     limit: int = Query(100, le=500),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db)
@@ -181,6 +229,11 @@ def list_messages(
             (MessageModel.text.contains(search)) |
             (MessageModel.user_name.contains(search))
         )
+    if has_location is not None:
+        if has_location:
+            query = query.filter(MessageModel.latitude.isnot(None))
+        else:
+            query = query.filter(MessageModel.latitude.is_(None))
     
     if status != MessageStatus.CANCELLED:
         query = query.filter(MessageModel.status != MessageStatus.CANCELLED)
@@ -268,13 +321,37 @@ def get_statistics(db: Session = Depends(get_db)):
         MessageModel.created_at >= week_start
     ).count()
     
+    # Статистика по геолокации
+    messages_with_location = db.query(MessageModel).filter(
+        MessageModel.latitude.isnot(None)
+    ).count()
+    
     return {
         "total": total,
         "by_status": by_status,
         "by_priority": by_priority,
         "average_response_time": round(float(avg_response), 2),
         "messages_today": messages_today,
-        "messages_this_week": messages_week
+        "messages_this_week": messages_week,
+        "messages_with_location": messages_with_location
+    }
+
+@app.get("/api/messages/location/{message_id}")
+def get_message_location(message_id: int, db: Session = Depends(get_db)):
+    """Получить геолокацию сообщения со ссылками на карты"""
+    message = db.query(MessageModel).filter(MessageModel.id == message_id).first()
+    if not message:
+        raise HTTPException(status_code=404, detail="Message not found")
+    
+    if not message.latitude or not message.longitude:
+        raise HTTPException(status_code=404, detail="Location not found")
+    
+    return {
+        "id": message.id,
+        "latitude": message.latitude,
+        "longitude": message.longitude,
+        "address": message.location_address,
+        "maps": generate_maps_links(message.latitude, message.longitude)
     }
 
 @app.get("/api/debug/photos")
@@ -291,7 +368,8 @@ def debug_photos(db: Session = Depends(get_db)):
             "user_name": msg.user_name,
             "photo_count": len(msg.photos),
             "photos": msg.photos,
-            "created_at": format_yekaterinburg_time(msg.created_at)
+            "created_at": format_yekaterinburg_time(msg.created_at),
+            "has_location": msg.latitude is not None
         })
     
     return {
@@ -311,11 +389,14 @@ def health_check():
 
 if __name__ == "__main__":
     import uvicorn
+    from sqlalchemy import inspect
+    
     now = get_yekaterinburg_time()
     print("=" * 50)
     print("🚀 Запуск CRM Backend на http://localhost:5001")
     print("📚 Документация API: http://localhost:5001/docs")
     print(f"🕐 Время Екатеринбурга: {format_yekaterinburg_time(now)}")
+    print("📍 Поддержка геолокации: Включена")
     print("=" * 50)
     
     uvicorn.run(

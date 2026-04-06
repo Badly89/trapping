@@ -1,17 +1,21 @@
-// frontend/src/App.js - ФИНАЛЬНАЯ ВЕРСИЯ
+// frontend/src/App.js - ПОЛНАЯ ВЕРСИЯ С ГЕОЛОКАЦИЕЙ
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import {
   Container, AppBar, Toolbar, Typography, Paper, List, ListItem,
   ListItemText, Chip, IconButton, Dialog, DialogTitle, DialogContent,
   TextField, Button, Card, CardContent, Badge, Grid,
-  Box, CircularProgress, Alert, Snackbar, Divider, Tabs, Tab
+  Box, CircularProgress, Alert, Snackbar, Divider, Tabs, Tab,
+  Tooltip
 } from '@mui/material';
 
 import {
   Refresh, CheckCircle, Schedule, AssignmentInd,
-  TrendingUp, Today, Speed, Close as CloseIcon
+  TrendingUp, Today, Speed, Close as CloseIcon,
+  LocationOn
 } from '@mui/icons-material';
+
+import LocationDisplay from './components/LocationDisplay';
 
 const API_URL = 'http://localhost:5001/api';
 
@@ -187,45 +191,40 @@ function App() {
     return texts[status] || status;
   };
 
- const formatDate = (dateString) => {
-  if (!dateString) return 'Дата неизвестна';
-  
-  try {
-    // Создаем дату из UTC строки
-    const utcDate = new Date(dateString);
+  const formatDate = (dateString) => {
+    if (!dateString) return 'Дата неизвестна';
     
-    // Проверка на валидность
-    if (isNaN(utcDate.getTime())) {
-      console.error('Invalid date:', dateString);
-      return 'Неверная дата';
+    try {
+      const date = new Date(dateString);
+      
+      if (isNaN(date.getTime())) {
+        console.error('Invalid date:', dateString);
+        return 'Неверная дата';
+      }
+      
+      const now = new Date();
+      const diff = now - date;
+      const minutes = Math.floor(diff / 60000);
+      const hours = Math.floor(diff / 3600000);
+      const days = Math.floor(diff / 86400000);
+      
+      if (minutes < 1) return 'Только что';
+      if (minutes < 60) return `${minutes} мин назад`;
+      if (hours < 24) return `${hours} ч назад`;
+      if (days < 7) return `${days} дн назад`;
+      
+      return date.toLocaleString('ru-RU', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+    } catch (error) {
+      console.error('Date formatting error:', error);
+      return 'Ошибка даты';
     }
-    
-    // Преобразуем в локальное время для отображения
-    const now = new Date();
-    const diff = now - utcDate;
-    const minutes = Math.floor(diff / 60000);
-    const hours = Math.floor(diff / 3600000);
-    const days = Math.floor(diff / 86400000);
-    
-    if (minutes < 1) return 'Только что';
-    if (minutes < 60) return `${minutes} мин назад`;
-    if (hours < 24) return `${hours} ч назад`;
-    if (days < 7) return `${days} дн назад`;
-    
-    // Показываем локальное время
-    return utcDate.toLocaleString('ru-RU', {
-      day: '2-digit',
-      month: '2-digit',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-      timeZone: 'Asia/Yekaterinburg'  // Явно указываем часовой пояс Москвы
-    });
-  } catch (error) {
-    console.error('Date formatting error:', error);
-    return 'Ошибка даты';
-  }
-};
+  };
 
   return (
     <>
@@ -236,15 +235,28 @@ function App() {
           </Typography>
           {stats && (
             <Box sx={{ display: 'flex', gap: 2 }}>
-              <Badge badgeContent={stats.by_status?.new || 0} color="error">
-                <Schedule />
-              </Badge>
-              <Badge badgeContent={stats.by_status?.processing || 0} color="primary">
-                <AssignmentInd />
-              </Badge>
-              <Badge badgeContent={stats.by_status?.completed || 0} color="success">
-                <CheckCircle />
-              </Badge>
+              <Tooltip title="Новые сообщения">
+                <Badge badgeContent={stats.by_status?.new || 0} color="error">
+                  <Schedule />
+                </Badge>
+              </Tooltip>
+              <Tooltip title="В работе">
+                <Badge badgeContent={stats.by_status?.processing || 0} color="primary">
+                  <AssignmentInd />
+                </Badge>
+              </Tooltip>
+              <Tooltip title="Завершены">
+                <Badge badgeContent={stats.by_status?.completed || 0} color="success">
+                  <CheckCircle />
+                </Badge>
+              </Tooltip>
+              {stats.messages_with_location > 0 && (
+                <Tooltip title={`${stats.messages_with_location} сообщений с геолокацией`}>
+                  <Badge badgeContent={stats.messages_with_location} color="info">
+                    <LocationOn />
+                  </Badge>
+                </Tooltip>
+              )}
             </Box>
           )}
           <IconButton color="inherit" onClick={() => { fetchMessages(); fetchStatistics(); }}>
@@ -257,7 +269,7 @@ function App() {
         {/* Статистика */}
         {stats && (
           <Grid container spacing={2} sx={{ marginBottom: 2 }}>
-            <Grid size={{ xs: 12, md: 4 }}>
+            <Grid size={{ xs: 12, md: 3 }}>
               <Card>
                 <CardContent>
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -270,7 +282,7 @@ function App() {
                 </CardContent>
               </Card>
             </Grid>
-            <Grid size={{ xs: 12, md: 4 }}>
+            <Grid size={{ xs: 12, md: 3 }}>
               <Card>
                 <CardContent>
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -283,7 +295,7 @@ function App() {
                 </CardContent>
               </Card>
             </Grid>
-            <Grid size={{ xs: 12, md: 4 }}>
+            <Grid size={{ xs: 12, md: 3 }}>
               <Card>
                 <CardContent>
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -293,6 +305,19 @@ function App() {
                     </Typography>
                   </Box>
                   <Typography variant="h4">{stats.by_status?.processing || 0}</Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+            <Grid size={{ xs: 12, md: 3 }}>
+              <Card>
+                <CardContent>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <LocationOn color="action" />
+                    <Typography variant="body2" color="textSecondary">
+                      С геолокацией
+                    </Typography>
+                  </Box>
+                  <Typography variant="h4">{stats.messages_with_location || 0}</Typography>
                 </CardContent>
               </Card>
             </Grid>
@@ -346,11 +371,22 @@ function App() {
                                 size="small"
                                 color={getStatusColor(msg.status)}
                               />
-                              <Chip
-                                label={formatDate(msg.created_at)}
-                                size="small"
-                                variant="outlined"
-                              />
+                              <Tooltip title={new Date(msg.created_at).toLocaleString('ru-RU')}>
+                                <Chip
+                                  label={formatDate(msg.created_at)}
+                                  size="small"
+                                  variant="outlined"
+                                />
+                              </Tooltip>
+                              {msg.latitude && msg.longitude && (
+                                <Chip
+                                  icon={<LocationOn />}
+                                  label="Геолокация"
+                                  size="small"
+                                  color="info"
+                                  variant="outlined"
+                                />
+                              )}
                             </Box>
                           }
                           secondary={
@@ -358,6 +394,17 @@ function App() {
                               <Typography component="span" variant="body2" color="textPrimary">
                                 {msg.text?.substring(0, 100) || 'Нет текста'}
                               </Typography>
+                              
+                              {/* Геолокация в списке сообщений */}
+                              {msg.latitude && msg.longitude && (
+                                <Box component="span" sx={{ display: 'block', mt: 0.5 }}>
+                                  <Typography component="span" variant="caption" color="textSecondary" sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                                    <LocationOn fontSize="inherit" />
+                                    📍 {msg.latitude.toFixed(4)}, {msg.longitude.toFixed(4)}
+                                  </Typography>
+                                </Box>
+                              )}
+                              
                               {msg.photos?.length > 0 && (
                                 <Box component="span" sx={{ display: 'block', mt: 0.5 }}>
                                   <Typography component="span" variant="caption" color="textSecondary">
@@ -453,7 +500,7 @@ function App() {
           </Grid>
         </Grid>
 
-        {/* Диалог редактирования сообщения с фото */}
+        {/* Диалог редактирования сообщения с фото и геолокацией */}
         <Dialog
           open={dialogOpen}
           onClose={() => setDialogOpen(false)}
@@ -473,13 +520,21 @@ function App() {
               <DialogContent>
                 <Box mb={2}>
                   <Typography variant="body2" color="textSecondary">
-                    {new Date(selectedMessage.created_at).toLocaleString('ru-RU')}
+                    📅 {new Date(selectedMessage.created_at).toLocaleString('ru-RU')}
                   </Typography>
                 </Box>
 
                 <Typography variant="body1" sx={{ mb: 2, whiteSpace: 'pre-wrap' }}>
                   {selectedMessage.text || 'Нет текста'}
                 </Typography>
+
+                {/* Геолокация в диалоге */}
+                {selectedMessage.latitude && selectedMessage.longitude && (
+                  <LocationDisplay 
+                    latitude={selectedMessage.latitude}
+                    longitude={selectedMessage.longitude}
+                  />
+                )}
 
                 {/* Галерея фото */}
                 <ImageGallery photos={selectedMessage.photos} />
